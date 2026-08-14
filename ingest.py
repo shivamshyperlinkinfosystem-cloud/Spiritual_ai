@@ -1,11 +1,9 @@
 """
-Bhagavad Gita PDF ingestion pipeline.
+Spiritual AI — ingestion pipeline.
+Auto-discovers every *.pdf in the project folder, tags each chunk with
+the source text name, and stores in ChromaDB + chunks.json for BM25.
 
-Improvements:
-  - Extracts verse numbers from Devanagari text as metadata
-  - Saves chunks.json alongside chroma_db for BM25 hybrid search
-
-Run once:
+Run once (or whenever you add new PDFs):
     python ingest.py
 """
 
@@ -23,23 +21,31 @@ from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BASE_DIR   = Path(__file__).parent
-PDF_PATH   = BASE_DIR / "final_geeta.pdf"
-CHROMA_DIR = BASE_DIR / "chroma_db"
-CHUNKS_PATH = BASE_DIR / "chunks.json"   # saved for BM25 retriever
+BASE_DIR    = Path(__file__).parent
+CHROMA_DIR  = BASE_DIR / "chroma_db"
+CHUNKS_PATH = BASE_DIR / "chunks.json"
 
 EMBED_MODEL   = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 CHUNK_SIZE    = 800
 CHUNK_OVERLAP = 150
 SEPARATORS    = ["\n\n", "\n", "॥", "।", " ", ""]
 
-# Verse pattern in the PDF: H§47H  H§2H  H 13 H etc.
+# Sanskrit verse pattern: H§47H, H 13 H
 _VERSE_RE   = re.compile(r'H[§\s]?(\d+)H')
-# Adhyaya (chapter) marker in Hindi: "अध्याय 2" or similar
 _CHAPTER_RE = re.compile(r'अध्याय\s*(\d+)', re.UNICODE)
 
+# Keyword → clean source name mapping
+_SOURCE_MAP = {
+    "geeta":      "Bhagavad Gita",
+    "gita":       "Bhagavad Gita",
+    "yogasutra":  "Yoga Sutras of Patanjali",
+    "yoga_sutra": "Yoga Sutras of Patanjali",
+    "patanjali":  "Yoga Sutras of Patanjali",
+    "upanishad":  "Ten Principal Upanishads",
+}
 
-# ── fastembed wrapper ─────────────────────────────────────────────────────────
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 class FastEmbeddings(Embeddings):
     def __init__(self, model_name: str):
         self._model = TextEmbedding(model_name=model_name)
@@ -51,50 +57,69 @@ class FastEmbeddings(Embeddings):
         return next(self._model.embed([text])).tolist()
 
 
-def _extract_meta(text: str, page_idx: int) -> dict:
-    """Extract chapter and verse numbers from page text."""
-    meta: dict = {"page": page_idx, "source": "Bhagavad Gita"}
+def source_name(pdf_path: Path) -> str:
+    """Derive a clean human-readable source name from a PDF filename."""
+    # Normalise: lowercase, strip extension, remove dots/dashes/underscores
+    stem = re.sub(r"[.\-_]", "", pdf_path.stem.lower())
+    for key, name in _SOURCE_MAP.items():
+        if key.replace("_", "") in stem:
+            return name
+    # Fallback: prettify the filename
+    return re.sub(r"[-_.]", " ", pdf_path.stem).strip().title()
+
+
+def extract_meta(text: str, page_idx: int, src: str) -> dict:
+    meta: dict = {"page": page_idx, "source": src, "source_text": src}
     verses  = _VERSE_RE.findall(text)
     chapter = _CHAPTER_RE.search(text)
     if verses:
-        meta["verse"] = verses[-1]          # last verse number on page
+        meta["verse"]   = verses[-1]
     if chapter:
         meta["chapter"] = chapter.group(1)
     return meta
 
 
+# ── Main ──────────────────────────────────────────────────────────────────────
 def ingest() -> None:
-    if not PDF_PATH.exists():
-        print(f"❌  PDF not found: {PDF_PATH}")
+    pdf_files = sorted(BASE_DIR.glob("*.pdf"))
+    if not pdf_files:
+        print("❌  No PDF files found in", BASE_DIR)
         sys.exit(1)
 
-    # ── Load ──────────────────────────────────────────────────────────────────
-    print(f"📖  Loading {PDF_PATH.name}  ({PDF_PATH.stat().st_size // 1024} KB) …")
-    reader = pypdf.PdfReader(str(PDF_PATH))
-    pages = [
-        Document(
-            page_content=page.extract_text() or "",
-            metadata=_extract_meta(page.extract_text() or "", i),
-        )
-        for i, page in enumerate(reader.pages)
-    ]
-    pages = [p for p in pages if p.page_content.strip()]
-    print(f"    Loaded {len(pages)} pages")
+    print(f"📚  Found {len(pdf_files)} PDF(s):")
+    for p in pdf_files:
+        print(f"     • {p.name}  →  \"{source_name(p)}\"")
 
-    # ── Split ─────────────────────────────────────────────────────────────────
+    all_chunks: list[Document] = []
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
+        chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP,
         separators=SEPARATORS,
     )
-    chunks = splitter.split_documents(pages)
-    print(f"    Split into {len(chunks)} chunks")
 
-    # ── Save chunks for BM25 ──────────────────────────────────────────────────
-    print(f"💾  Saving {len(chunks)} chunks to {CHUNKS_PATH.name} for BM25 …")
+    for pdf_path in pdf_files:
+        src = source_name(pdf_path)
+        print(f"\n📖  Loading «{src}» ({pdf_path.stat().st_size // 1024} KB) …")
+
+        reader = pypdf.PdfReader(str(pdf_path))
+        pages  = [
+            Document(
+                page_content=page.extract_text() or "",
+                metadata=extract_meta(page.extract_text() or "", i, src),
+            )
+            for i, page in enumerate(reader.pages)
+        ]
+        pages  = [p for p in pages if p.page_content.strip()]
+        chunks = splitter.split_documents(pages)
+        all_chunks.extend(chunks)
+        print(f"     {len(pages)} pages → {len(chunks)} chunks")
+
+    print(f"\n📦  Total: {len(all_chunks)} chunks from {len(pdf_files)} texts")
+
+    # ── Save chunks.json for BM25 ─────────────────────────────────────────────
+    print(f"💾  Saving chunks.json …")
     with open(CHUNKS_PATH, "w", encoding="utf-8") as f:
         json.dump(
-            [{"content": c.page_content, "metadata": c.metadata} for c in chunks],
+            [{"content": c.page_content, "metadata": c.metadata} for c in all_chunks],
             f, ensure_ascii=False, indent=2,
         )
 
@@ -108,21 +133,24 @@ def ingest() -> None:
 
     vectorstore = None
     batch_size  = 100
-    for i in range(0, len(chunks), batch_size):
-        batch = chunks[i : i + batch_size]
+    for i in range(0, len(all_chunks), batch_size):
+        batch = all_chunks[i : i + batch_size]
         if vectorstore is None:
             vectorstore = Chroma.from_documents(
-                documents=batch,
-                embedding=embeddings,
+                documents=batch, embedding=embeddings,
                 persist_directory=str(CHROMA_DIR),
             )
         else:
             vectorstore.add_documents(batch)
-        done = min(i + batch_size, len(chunks))
-        print(f"    Indexed {done}/{len(chunks)} chunks …", end="\r")
+        done = min(i + batch_size, len(all_chunks))
+        print(f"    Indexed {done}/{len(all_chunks)} chunks …", end="\r")
 
-    print(f"\n\n✅  Ingestion complete — {len(chunks)} chunks in {CHROMA_DIR}")
-    print("    You can now run:  streamlit run app.py")
+    print(f"\n\n✅  Ingestion complete — {len(all_chunks)} chunks from {len(pdf_files)} texts")
+    sources = sorted({source_name(p) for p in pdf_files})
+    print("    Texts in knowledge base:")
+    for s in sources:
+        print(f"     • {s}")
+    print("\n    You can now run:  streamlit run app.py")
 
 
 if __name__ == "__main__":

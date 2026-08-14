@@ -1,35 +1,39 @@
 """
-Spiritual AI — Streamlit UI with 5 Guru personas.
+app.py — Streamlit entry point for Spiritual AI.
 Run:  streamlit run app.py
 """
 
 import os
+import sys
 from pathlib import Path
+
+# Make src/ importable
+sys.path.insert(0, str(Path(__file__).parent))
 
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage
 
-st.set_page_config(page_title="Spiritual AI", page_icon="🕉", layout="centered")
+from src.config import EMBED_MODEL, VECTORSTORE
+from src.pipeline.embeddings import FastEmbeddings
+from src.pipeline.graph import build_app
+from src.prompts import PERSONAS, WELCOME_MESSAGES
 
-BASE_DIR   = Path(__file__).parent
-CHROMA_DIR = BASE_DIR / "chroma_db"
+st.set_page_config(page_title="Spiritual AI", page_icon="🕉", layout="centered")
 
 
 # ── Cached resources ──────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner="Loading knowledge base…")
 def load_base():
     """Embeddings + vectorstore — loaded once, shared across all personas."""
-    from geeta_chat import FastEmbeddings, EMBED_MODEL
     from langchain_chroma import Chroma
     emb = FastEmbeddings(EMBED_MODEL)
-    vs  = Chroma(persist_directory=str(CHROMA_DIR), embedding_function=emb)
+    vs  = Chroma(persist_directory=str(VECTORSTORE), embedding_function=emb)
     return emb, vs
 
 
 @st.cache_resource(show_spinner="Preparing Guru…")
 def load_persona_app(persona_key: str):
     """Compile LangGraph app for one persona (cached per persona key)."""
-    from geeta_chat import build_app, PERSONAS
     emb, vs = load_base()
     return build_app(vs, emb, PERSONAS[persona_key]["system"])
 
@@ -49,7 +53,6 @@ with st.sidebar:
     st.markdown("*AI Virtual Guru — Phase 1*")
     st.divider()
 
-    from prompts import PERSONAS, WELCOME_MESSAGES
     persona_keys = list(PERSONAS.keys())
 
     st.markdown("### Choose Your Guru")
@@ -61,7 +64,6 @@ with st.sidebar:
         format_func=lambda k: f"{k}\n_{PERSONAS[k]['tagline']}_",
     )
 
-    # Reset conversation when persona changes
     if selected != st.session_state.persona:
         st.session_state.persona      = selected
         st.session_state.messages     = []
@@ -69,15 +71,15 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    st.markdown(f"**Knowledge base**")
+    st.markdown("**Knowledge base**")
     st.caption("• Bhagavad Gita")
     st.caption("• Yoga Sutras of Patanjali")
     st.caption("• Ten Principal Upanishads")
     st.divider()
     st.markdown("**LLM** `llama-3.3-70b-versatile`")
     st.markdown("**Search** Hybrid · vector + BM25")
-
     st.divider()
+
     if st.button("🗑  Clear conversation", use_container_width=True):
         st.session_state.messages     = []
         st.session_state.chat_display = []
@@ -88,22 +90,25 @@ with st.sidebar:
 
 
 # ── Header ────────────────────────────────────────────────────────────────────
-persona_info = PERSONAS[st.session_state.persona]
 icon = st.session_state.persona.split()[0]
-
 st.markdown(
     f"<h2 style='text-align:center'>{st.session_state.persona}</h2>",
     unsafe_allow_html=True,
 )
 st.markdown(
-    f"<p style='text-align:center;color:gray'>{persona_info['tagline']}</p>",
+    f"<p style='text-align:center;color:gray'>"
+    f"{PERSONAS[st.session_state.persona]['tagline']}</p>",
     unsafe_allow_html=True,
 )
 st.divider()
 
+
 # ── Setup gates ───────────────────────────────────────────────────────────────
-if not CHROMA_DIR.exists():
-    st.error("**Knowledge base not found.**\n\nRun:\n```\npython ingest.py\n```")
+if not VECTORSTORE.exists():
+    st.error(
+        "**Knowledge base not found.**\n\n"
+        "Run:\n```\npython scripts/ingest.py\n```"
+    )
     st.stop()
 
 groq_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
@@ -115,7 +120,8 @@ else:
 
 app = load_persona_app(st.session_state.persona)
 
-# ── Render chat history ───────────────────────────────────────────────────────
+
+# ── Chat history ──────────────────────────────────────────────────────────────
 for entry in st.session_state.chat_display:
     with st.chat_message(entry["role"], avatar=entry["avatar"]):
         st.markdown(entry["content"])
@@ -124,13 +130,13 @@ for entry in st.session_state.chat_display:
                 for src in entry["sources"]:
                     st.caption(f"• {src}")
 
-# ── Welcome message ───────────────────────────────────────────────────────────
 if not st.session_state.chat_display:
     with st.chat_message("assistant", avatar=icon):
-        st.markdown(WELCOME_MESSAGES.get(st.session_state.persona,
-                                         "Namaste 🙏 How can I guide you today?"))
+        st.markdown(WELCOME_MESSAGES.get(
+            st.session_state.persona, "Namaste 🙏 How can I guide you today?"))
 
-# ── Chat input ────────────────────────────────────────────────────────────────
+
+# ── Chat input + streaming response ──────────────────────────────────────────
 user_input = st.chat_input(f"Ask {st.session_state.persona.strip()}…")
 
 if user_input:
@@ -149,10 +155,9 @@ if user_input:
         "query":       "",
     }
 
-    # ── Streaming with step indicators ───────────────────────────────────────
     with st.chat_message("assistant", avatar=icon):
-        step_ph  = st.empty()
-        ans_ph   = st.empty()
+        step_ph         = st.empty()
+        ans_ph          = st.empty()
         full_content    = ""
         display_content = ""
 
@@ -185,12 +190,10 @@ if user_input:
                 content = getattr(chunk, "content", "")
                 if not content:
                     continue
-
                 if node == "generate":
-                    full_content += content
-                    display_content = full_content.split("\n\n*— Sources:")[0]
+                    full_content    += content
+                    display_content  = full_content.split("\n\n*— Sources:")[0]
                     ans_ph.markdown(display_content + "▌")
-
                 elif node == "reject":
                     step_ph.empty()
                     full_content    = content
@@ -200,18 +203,15 @@ if user_input:
         step_ph.empty()
         ans_ph.markdown(display_content)
 
-        # Sources
         sources = []
         if "\n\n*— Sources:" in full_content:
             raw     = full_content.split("\n\n*— Sources:")[1].rstrip("*").strip()
             sources = [s.strip() for s in raw.split(",") if s.strip()]
-
         if sources:
             with st.expander("📖 Sources", expanded=False):
                 for src in sources:
                     st.caption(f"• {src}")
 
-    # Update session state
     st.session_state.messages = list(st.session_state.messages) + [
         AIMessage(content=full_content)
     ]

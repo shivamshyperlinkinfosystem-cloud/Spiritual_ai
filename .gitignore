@@ -14,10 +14,10 @@ venv/
 .venv/
 env/
 
-# Virtual environment only — knowledge base files ARE committed for Streamlit Cloud
-# chroma_db/   ← committed (pre-built vector store, ~14 MB)
-# chunks.json  ← committed (BM25 index)
-# final_geeta.pdf ← committed (source text)
+# Knowledge base (data/) IS committed for Streamlit Cloud deployment
+# data/vectorstore/  ← committed (pre-built ChromaDB, ~14 MB)
+# data/chunks.json   ← committed (BM25 index)
+# data/pdfs/         ← committed (source PDFs)
 
 # API keys / secrets
 .env
