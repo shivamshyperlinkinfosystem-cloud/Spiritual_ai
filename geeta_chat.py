@@ -1,20 +1,9 @@
 """
-Bhagavad Gita AI — LangGraph + RAG + Groq
-
-Improvements over v1:
-  1. Query rewriting   — rewrites follow-up questions into standalone search queries
-  2. Hybrid search     — vector (Chroma MMR) + keyword (BM25) combined
-  3. Compression       — filters retrieved chunks by embedding similarity to query
-  4. Chapter/verse     — cites Ch.X V.Y when metadata is available
-  5. Grounding         — system prompt requires explicit sourcing of every claim
-  6. Topic guard       — rejects unrelated questions before any retrieval
+Spiritual AI — LangGraph RAG with 5 Guru personas.
 
 Graph:
-    START → guard → (relevant)  → rewrite → retrieve → generate → END
-                  → (unrelated) → reject  → END
-
-Run:
-    python geeta_chat.py
+    START → guard → RELEVANT → rewrite → retrieve → generate → END
+                  → UNRELATED → reject  → END
 """
 
 import json
@@ -43,91 +32,27 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.text import Text
 
+# ── All prompts live in prompts.py — edit there, not here ─────────────────────
+from prompts import (
+    PERSONAS, DEFAULT_PERSONA,
+    GUARD_SYSTEM, REWRITE_PROMPT, REJECT_MESSAGE,
+    WELCOME_MESSAGES,
+)
+
 # ── Config ────────────────────────────────────────────────────────────────────
-BASE_DIR    = Path(__file__).parent
-CHROMA_DIR  = BASE_DIR / "chroma_db"
-CHUNKS_PATH = BASE_DIR / "chunks.json"
-EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-LLM_MODEL   = "llama-3.3-70b-versatile"
-RETRIEVAL_K = 8    # fetch more, then compress down
-FINAL_K     = 5    # keep top-N after compression
-SIM_THRESHOLD = 0.30  # minimum cosine similarity to keep a chunk
+BASE_DIR      = Path(__file__).parent
+CHROMA_DIR    = BASE_DIR / "chroma_db"
+CHUNKS_PATH   = BASE_DIR / "chunks.json"
+EMBED_MODEL   = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+LLM_MODEL     = "llama-3.3-70b-versatile"
+RETRIEVAL_K   = 8
+FINAL_K       = 5
+SIM_THRESHOLD = 0.28
 
-# ── Prompts ───────────────────────────────────────────────────────────────────
-GUARD_SYSTEM = """\
-You are a topic classifier for a Bhagavad Gita guidance system.
-Classify the user's input as RELEVANT or IRRELEVANT.
 
-RELEVANT — includes ALL of the following:
-  • Direct Gita questions: shlokas, Sanskrit verses, chapters, Krishna, Arjuna,
-    commentaries, Mahabharata, Vedic/Hindu philosophy.
-  • Spiritual concepts: Karma Yoga, Bhakti Yoga, Jnana Yoga, Dharma, Atman,
-    Brahman, Moksha, Maya, meditation, self-realisation.
-  • Personal life struggles that the Gita speaks to — THESE ARE ALWAYS RELEVANT:
-    confusion about purpose or goal, lack of focus or motivation, anxiety or fear,
-    dealing with failure or disappointment, questions about duty and right action,
-    how to act without attachment to results, overcoming grief or despair,
-    finding meaning, inner peace, self-discipline, dealing with temptation,
-    relationships and detachment, fear of death, identity questions.
-  The Bhagavad Gita is a guide for human life — any genuine human struggle
-  can be answered through its teachings.
+# ── (prompts removed — see prompts.py) ───────────────────────────────────────
 
-IRRELEVANT — only clear off-topic questions:
-  coding / programming, science / math, weather, cooking recipes, sports scores,
-  news / current events, medical diagnosis, legal advice, financial tips,
-  entertainment recommendations (movies, music), geography facts with no
-  spiritual angle.
 
-When in doubt, classify as RELEVANT.
-
-Reply with exactly one word: RELEVANT or IRRELEVANT"""
-
-REWRITE_PROMPT = """\
-Given the conversation history and the latest question about the Bhagavad Gita, \
-rewrite the question as a concise standalone search query that captures all context \
-needed to retrieve the relevant shloka or passage.
-- Include key Sanskrit/spiritual terms from earlier turns if referenced
-- Keep it brief (1 sentence)
-- Output only the search query, nothing else
-
-Conversation history:
-{history}
-
-Latest question: {question}
-
-Standalone search query:"""
-
-REJECT_MESSAGE = """\
-🙏 I am here solely to guide you through the wisdom of the **Bhagavad Gita**.
-
-Your question appears to be outside its scope. Please ask me about:
-- **Shlokas & chapters** — e.g. *"What does Chapter 2, Verse 47 say?"*
-- **Core teachings** — Karma Yoga, Bhakti Yoga, Jnana Yoga
-- **Key concepts** — Dharma, Atman, Brahman, Moksha, Maya
-- **Sanskrit meanings** — I will explain the original text
-- **Krishna's guidance** to Arjuna on duty, action, and liberation
-
-*What would you like to learn from the Gita?*"""
-
-SYSTEM_PROMPT = """\
-You are a compassionate Acharya (spiritual teacher) and Sanskrit scholar of the \
-Bhagavad Gita. You guide both scholars seeking textual knowledge AND seekers facing \
-real-life struggles — because the Gita was spoken precisely for someone in crisis.
-
-Rules:
-1. When the user asks a personal life question (focus, purpose, anxiety, failure, \
-   duty, attachment, grief), connect their struggle directly to the Gita's teaching. \
-   Show them how Krishna's words apply to their situation. This is the Gita's highest use.
-2. Base every answer on the retrieved passages below. Quote the shloka when present.
-3. Always cite Adhyaya (chapter) and Shloka number when identifiable.
-4. If the retrieved context does not cover a point, say: \
-   "This is not in the retrieved passages, but the Gita teaches..." and give \
-   the relevant wisdom briefly.
-5. Be warm, practical, and encouraging — like a wise teacher, not a search engine.
-
---- Retrieved passages from the Bhagavad Gita ---
-{context}
----"""
 
 
 # ── fastembed wrapper ─────────────────────────────────────────────────────────
@@ -144,21 +69,17 @@ class FastEmbeddings(Embeddings):
 
 # ── BM25 retriever ────────────────────────────────────────────────────────────
 class BM25Retriever:
-    """Keyword-based retriever using BM25Okapi over the saved chunks."""
-
     def __init__(self, docs: list[Document]):
         self.docs = docs
-        tokenized = [d.page_content.lower().split() for d in docs]
-        self.bm25 = BM25Okapi(tokenized)
+        self.bm25 = BM25Okapi([d.page_content.lower().split() for d in docs])
 
     def invoke(self, query: str, k: int = RETRIEVAL_K) -> list[Document]:
-        tokens = query.lower().split()
-        scores = self.bm25.get_scores(tokens)
+        scores  = self.bm25.get_scores(query.lower().split())
         top_idx = scores.argsort()[-k:][::-1]
         return [self.docs[i] for i in top_idx if scores[i] > 0]
 
     @classmethod
-    def from_json(cls, path: Path) -> "BM25Retriever | None":
+    def from_json(cls, path: Path):
         if not path.exists():
             return None
         with open(path, encoding="utf-8") as f:
@@ -169,91 +90,75 @@ class BM25Retriever:
 
 # ── Contextual compression ────────────────────────────────────────────────────
 def compress(query: str, docs: list[Document], embeddings: FastEmbeddings) -> list[Document]:
-    """Keep only docs whose cosine similarity to the query exceeds SIM_THRESHOLD."""
     if not docs:
         return docs
-    q_emb  = np.array(embeddings.embed_query(query))
-    d_embs = np.array(embeddings.embed_documents([d.page_content for d in docs]))
-    q_norm = q_emb / (np.linalg.norm(q_emb) + 1e-9)
-    d_norm = d_embs / (np.linalg.norm(d_embs, axis=1, keepdims=True) + 1e-9)
-    sims   = d_norm @ q_norm
-    ranked = sorted(zip(docs, sims), key=lambda x: x[1], reverse=True)
-    return [d for d, s in ranked if s >= SIM_THRESHOLD][:FINAL_K]
+    q   = np.array(embeddings.embed_query(query))
+    d   = np.array(embeddings.embed_documents([x.page_content for x in docs]))
+    qn  = q / (np.linalg.norm(q) + 1e-9)
+    dn  = d / (np.linalg.norm(d, axis=1, keepdims=True) + 1e-9)
+    sim = dn @ qn
+    ranked = sorted(zip(docs, sim), key=lambda x: x[1], reverse=True)
+    return [doc for doc, s in ranked if s >= SIM_THRESHOLD][:FINAL_K]
 
 
 # ── LangGraph state ───────────────────────────────────────────────────────────
-class GeetaState(TypedDict):
+class SpiritualState(TypedDict):
     messages:    Annotated[Sequence[BaseMessage], add_messages]
     context:     str
     sources:     list[str]
     is_relevant: bool
-    query:       str    # rewritten standalone query
+    query:       str
 
 
-# ── Guard node ────────────────────────────────────────────────────────────────
+# ── Nodes ─────────────────────────────────────────────────────────────────────
 def make_guard_node(llm):
-    def guard(state: GeetaState) -> dict:
-        last_user = next(
-            (m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)), None
-        )
-        if last_user is None:
+    def guard(state: SpiritualState) -> dict:
+        last = next((m for m in reversed(state["messages"])
+                     if isinstance(m, HumanMessage)), None)
+        if last is None:
             return {"is_relevant": True}
-        resp = llm.invoke([
-            SystemMessage(content=GUARD_SYSTEM),
-            HumanMessage(content=last_user.content),
-        ])
+        resp = llm.invoke([SystemMessage(content=GUARD_SYSTEM),
+                           HumanMessage(content=last.content)])
         return {"is_relevant": "IRRELEVANT" not in resp.content.strip().upper()}
     return guard
 
 
-# ── Reject node ───────────────────────────────────────────────────────────────
-def reject(state: GeetaState) -> dict:
+def reject(state: SpiritualState) -> dict:
     return {"messages": [AIMessage(content=REJECT_MESSAGE)]}
 
 
-# ── Query rewrite node ────────────────────────────────────────────────────────
 def make_rewrite_node(llm):
-    def rewrite(state: GeetaState) -> dict:
+    def rewrite(state: SpiritualState) -> dict:
         msgs = list(state["messages"])
-        last_user = next(
-            (m for m in reversed(msgs) if isinstance(m, HumanMessage)), None
-        )
-        if last_user is None:
+        last = next((m for m in reversed(msgs) if isinstance(m, HumanMessage)), None)
+        if last is None:
             return {"query": ""}
-
-        prev = [m for m in msgs if m is not last_user]
-        if not prev:                        # first turn — no rewriting needed
-            return {"query": last_user.content}
-
+        prev = [m for m in msgs if m is not last]
+        if not prev:
+            return {"query": last.content}
         history = "\n".join(
             f"{'User' if isinstance(m, HumanMessage) else 'AI'}: {m.content[:200]}"
-            for m in prev[-6:]              # last 3 turns
+            for m in prev[-6:]
         )
         resp = llm.invoke(
-            REWRITE_PROMPT.format(history=history, question=last_user.content)
+            REWRITE_PROMPT.format(history=history, question=last.content)
         )
-        query = resp.content.strip()
-        return {"query": query or last_user.content}
+        return {"query": resp.content.strip() or last.content}
     return rewrite
 
 
-# ── Hybrid retrieve + compress node ──────────────────────────────────────────
-def make_retrieve_node(vector_retriever, bm25: BM25Retriever | None, embeddings):
-    def retrieve(state: GeetaState) -> dict:
+def make_retrieve_node(vector_retriever, bm25, embeddings):
+    def retrieve(state: SpiritualState) -> dict:
         query = state.get("query") or next(
-            (m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
-            "",
+            (m.content for m in reversed(state["messages"])
+             if isinstance(m, HumanMessage)), ""
         )
         if not query:
             return {"context": "", "sources": []}
 
-        # 1. Vector search (MMR for diversity)
         vec_docs = vector_retriever.invoke(query)
+        kw_docs  = bm25.invoke(query) if bm25 else []
 
-        # 2. BM25 keyword search
-        kw_docs = bm25.invoke(query) if bm25 else []
-
-        # 3. Merge & deduplicate (vector docs first = higher priority)
         seen, combined = set(), []
         for doc in vec_docs + kw_docs:
             key = doc.page_content[:80]
@@ -261,27 +166,29 @@ def make_retrieve_node(vector_retriever, bm25: BM25Retriever | None, embeddings)
                 seen.add(key)
                 combined.append(doc)
 
-        # 4. Contextual compression
         filtered = compress(query, combined, embeddings)
 
-        # 5. Build context + source citations
         parts, sources = [], []
         for i, doc in enumerate(filtered, 1):
             parts.append(f"[Passage {i}]\n{doc.page_content.strip()}")
-            meta = doc.metadata
-            chap, verse, page = meta.get("chapter"), meta.get("verse"), meta.get("page")
-            if chap and verse:
-                sources.append(f"Ch.{chap} V.{verse}")
+            m    = doc.metadata
+            src  = m.get("source_text", m.get("source", "Scripture"))
+            chap = m.get("chapter")
+            vers = m.get("verse")
+            page = m.get("page")
+            if chap and vers:
+                sources.append(f"{src} Ch.{chap} V.{vers}")
             elif page is not None:
-                sources.append(f"p.{int(page) + 1}")
+                sources.append(f"{src} p.{int(page)+1}")
+            else:
+                sources.append(src)
 
         return {"context": "\n\n".join(parts), "sources": sorted(set(sources))}
     return retrieve
 
 
-# ── Generate node ─────────────────────────────────────────────────────────────
 def make_generate_node(llm, prompt_template):
-    def generate(state: GeetaState) -> dict:
+    def generate(state: SpiritualState) -> dict:
         formatted = prompt_template.invoke({
             "context":  state.get("context") or "(no passages retrieved)",
             "messages": state["messages"],
@@ -294,13 +201,16 @@ def make_generate_node(llm, prompt_template):
     return generate
 
 
-# ── Routing ───────────────────────────────────────────────────────────────────
-def route_after_guard(state: GeetaState) -> str:
+def route_after_guard(state: SpiritualState) -> str:
     return "rewrite" if state.get("is_relevant", True) else "reject"
 
 
-# ── Build compiled LangGraph app ──────────────────────────────────────────────
-def build_app(vectorstore, embeddings: FastEmbeddings):
+# ── Build app (one per persona) ───────────────────────────────────────────────
+def build_app(vectorstore, embeddings: FastEmbeddings,
+              system_prompt: str | None = None):
+    if system_prompt is None:
+        system_prompt = PERSONAS[DEFAULT_PERSONA]["system"]
+
     llm = ChatGroq(model=LLM_MODEL, temperature=0.1, max_tokens=2048)
 
     vector_retriever = vectorstore.as_retriever(
@@ -310,11 +220,11 @@ def build_app(vectorstore, embeddings: FastEmbeddings):
     bm25 = BM25Retriever.from_json(CHUNKS_PATH)
 
     prompt_template = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
+        ("system", system_prompt),
         MessagesPlaceholder(variable_name="messages"),
     ])
 
-    g = StateGraph(GeetaState)
+    g = StateGraph(SpiritualState)
     g.add_node("guard",    make_guard_node(llm))
     g.add_node("rewrite",  make_rewrite_node(llm))
     g.add_node("retrieve", make_retrieve_node(vector_retriever, bm25, embeddings))
@@ -332,31 +242,40 @@ def build_app(vectorstore, embeddings: FastEmbeddings):
     return g.compile()
 
 
-# ── Terminal chat loop ────────────────────────────────────────────────────────
+# ── Terminal chat ─────────────────────────────────────────────────────────────
 def chat() -> None:
     console = Console()
 
     if not CHROMA_DIR.exists():
         console.print(Panel("[red]Run 'python ingest.py' first.[/red]", border_style="red"))
         sys.exit(1)
-
     if not os.getenv("GROQ_API_KEY"):
-        console.print("[red]Set GROQ_API_KEY before running.[/red]")
+        console.print("[red]Set GROQ_API_KEY first.[/red]")
         sys.exit(1)
 
+    # Pick persona
+    persona_keys = list(PERSONAS.keys())
     console.print(Panel.fit(
-        "[bold yellow]🕉  Bhagavad Gita AI[/bold yellow]\n\n"
-        "[dim]Hybrid search · Query rewriting · Contextual compression\n"
-        "Type 'exit' · 'clear' to reset[/dim]",
+        "[bold yellow]🕉  Spiritual AI — Choose your Guru[/bold yellow]\n\n"
+        + "\n".join(f"  [{i+1}] {k}  —  {PERSONAS[k]['tagline']}"
+                   for i, k in enumerate(persona_keys)),
         border_style="yellow",
     ))
+    try:
+        choice = int(console.input("\nEnter number (default 1): ").strip() or "1")
+        persona_key = persona_keys[choice - 1]
+    except (ValueError, IndexError):
+        persona_key = DEFAULT_PERSONA
 
-    with console.status("[dim]Loading…[/dim]"):
+    console.print(f"\n[green]Guru selected: {persona_key}[/green]\n")
+
+    with console.status("[dim]Loading knowledge base…[/dim]"):
         embeddings  = FastEmbeddings(EMBED_MODEL)
-        vectorstore = Chroma(persist_directory=str(CHROMA_DIR), embedding_function=embeddings)
-        app         = build_app(vectorstore, embeddings)
+        vectorstore = Chroma(persist_directory=str(CHROMA_DIR),
+                             embedding_function=embeddings)
+        app         = build_app(vectorstore, embeddings,
+                                PERSONAS[persona_key]["system"])
 
-    console.print("[dim]Ready.[/dim]\n")
     messages: list[BaseMessage] = []
 
     while True:
@@ -365,10 +284,9 @@ def chat() -> None:
         except (EOFError, KeyboardInterrupt):
             console.print("\n[yellow]🙏 Namaste![/yellow]")
             break
-
         if not user_input:
             continue
-        if user_input.lower() in ("exit", "quit", "q"):
+        if user_input.lower() in ("exit", "quit"):
             console.print("\n[yellow]🙏 Namaste![/yellow]")
             break
         if user_input.lower() == "clear":
@@ -383,9 +301,8 @@ def chat() -> None:
                 "is_relevant": True, "query": "",
             })
         messages = list(result["messages"])
-
         console.print()
-        console.print(Text("🕉  Gita AI:", style="bold green"))
+        console.print(Text(f"{persona_key.split()[0]}  Guru:", style="bold green"))
         console.print(Markdown(messages[-1].content))
         console.print()
 
