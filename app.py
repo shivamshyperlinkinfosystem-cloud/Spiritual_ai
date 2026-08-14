@@ -163,7 +163,10 @@ if user_input:
 
                 elif node in STEP_LABELS:
                     nxt = STEP_LABELS[node]
-                    step_ph.caption(nxt) if nxt else step_ph.empty()
+                    if nxt:
+                        step_ph.caption(nxt)
+                    else:
+                        step_ph.empty()
 
             # ── Token / message from an LLM node ─────────────────────────────
             elif mode == "messages":
