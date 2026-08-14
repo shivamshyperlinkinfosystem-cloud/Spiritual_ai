@@ -75,8 +75,16 @@ if not CHROMA_DIR.exists():
     st.error("**Knowledge base not found.**\n\nRun:\n```\npython ingest.py\n```")
     st.stop()
 
-if not os.getenv("GROQ_API_KEY"):
-    st.error("**GROQ_API_KEY not set.**\n\nRun:\n```\nexport GROQ_API_KEY=gsk_...\n```")
+# Read from Streamlit secrets (cloud) or environment variable (local)
+groq_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
+if groq_key:
+    os.environ["GROQ_API_KEY"] = groq_key   # make it available to langchain_groq
+else:
+    st.error(
+        "**GROQ_API_KEY not set.**\n\n"
+        "**Local:** `export GROQ_API_KEY=gsk_...`\n\n"
+        "**Streamlit Cloud:** add it under *Settings → Secrets*"
+    )
     st.stop()
 
 app = load_backend()
@@ -124,38 +132,66 @@ if user_input:
         "query":       "",
     }
 
-    # ── Streaming response ────────────────────────────────────────────────────
+    # ── Streaming response with live step indicators ──────────────────────────
     with st.chat_message("assistant", avatar="🕉"):
-        placeholder  = st.empty()
-        full_content = ""
+        step_ph  = st.empty()   # shows current pipeline step
+        ans_ph   = st.empty()   # streams the answer
+        full_content    = ""
+        display_content = ""
 
-        # stream_mode="messages" yields (AIMessageChunk, metadata) per token
-        for chunk, metadata in app.stream(initial_state, stream_mode="messages"):
-            node = metadata.get("langgraph_node", "")
+        # What to show AFTER each node completes
+        # (None = clear the step indicator)
+        STEP_LABELS = {
+            "rewrite":  "📖  Searching the Gita…",
+            "retrieve": None,
+        }
 
-            if not hasattr(chunk, "content") or not chunk.content:
-                continue
+        step_ph.caption("🔍  Checking relevance…")
 
-            if node == "generate":
-                full_content += chunk.content
-                # Hide inline source footnote while still generating
-                display = full_content.split("\n\n*— Sources:")[0]
-                placeholder.markdown(display + "▌")
+        for mode, data in app.stream(initial_state,
+                                     stream_mode=["updates", "messages"]):
+            # ── Node completed ────────────────────────────────────────────────
+            if mode == "updates":
+                node = next(iter(data))
 
-            elif node == "reject":
-                # Static rejection message — not streamed, render at once
-                full_content = chunk.content
-                placeholder.markdown(full_content)
+                if node == "guard":
+                    is_rel = data["guard"].get("is_relevant", True)
+                    step_ph.caption(
+                        "✍️  Understanding your question…" if is_rel
+                        else "🤔  Checking Gita scope…"
+                    )
 
-        # ── Final render without cursor ───────────────────────────────────────
-        display_content = full_content.split("\n\n*— Sources:")[0] \
-            if "\n\n*— Sources:" in full_content else full_content
-        placeholder.markdown(display_content)
+                elif node in STEP_LABELS:
+                    nxt = STEP_LABELS[node]
+                    step_ph.caption(nxt) if nxt else step_ph.empty()
+
+            # ── Token / message from an LLM node ─────────────────────────────
+            elif mode == "messages":
+                chunk, meta = data
+                node    = meta.get("langgraph_node", "")
+                content = getattr(chunk, "content", "")
+                if not content:
+                    continue
+
+                if node == "generate":
+                    full_content += content
+                    display_content = full_content.split("\n\n*— Sources:")[0]
+                    ans_ph.markdown(display_content + "▌")
+
+                elif node == "reject":
+                    step_ph.empty()
+                    full_content    = content
+                    display_content = content
+                    ans_ph.markdown(display_content)
+
+        # ── Final render (remove cursor) ──────────────────────────────────────
+        step_ph.empty()
+        ans_ph.markdown(display_content)
 
         # Extract sources from inline footnote
         sources = []
         if "\n\n*— Sources:" in full_content:
-            raw = full_content.split("\n\n*— Sources:")[1].rstrip("*").strip()
+            raw     = full_content.split("\n\n*— Sources:")[1].rstrip("*").strip()
             sources = [s.strip() for s in raw.split(",") if s.strip()]
 
         if sources:
