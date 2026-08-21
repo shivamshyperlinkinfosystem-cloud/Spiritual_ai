@@ -16,7 +16,7 @@ CHUNKS_PATH   = DATA_DIR / "chunks.json"
 
 # ── Model config ──────────────────────────────────────────────────────────────
 EMBED_MODEL   = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-LLM_MODEL     = "llama-3.3-70b-versatile"
+LLM_MODEL     = "openai/gpt-oss-120b"
 
 # ── Retrieval tuning ──────────────────────────────────────────────────────────
 RETRIEVAL_K   = 8      # candidates fetched from each retriever
