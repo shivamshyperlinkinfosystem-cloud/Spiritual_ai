@@ -111,11 +111,19 @@ if not VECTORSTORE.exists():
     )
     st.stop()
 
-groq_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
-if groq_key:
+try:
+    groq_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
+except Exception:
+    groq_key = os.getenv("GROQ_API_KEY", "")
+
+if groq_key and groq_key.startswith("gsk_"):
     os.environ["GROQ_API_KEY"] = groq_key
 else:
-    st.error("**GROQ_API_KEY not set.**\n\nLocal: `export GROQ_API_KEY=gsk_...`")
+    st.error(
+        "**GROQ_API_KEY not set or invalid.**\n\n"
+        "- **Local:** `export GROQ_API_KEY=gsk_...`\n"
+        "- **Streamlit Cloud:** App Settings → Secrets → add `GROQ_API_KEY = \"gsk_...\"`"
+    )
     st.stop()
 
 app = load_persona_app(st.session_state.persona)
