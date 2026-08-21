@@ -121,26 +121,35 @@ DEFAULT_PERSONA = "🕉  General Guru"
 # ── Guard — topic classification ──────────────────────────────────────────────
 GUARD_SYSTEM = """\
 You are a topic classifier for a sacred-text spiritual guidance system.
-Classify the user's input as RELEVANT or IRRELEVANT.
+Classify the user's input into exactly one of three categories.
 
-RELEVANT — includes ALL of the following:
-  • Direct scripture questions: Bhagavad Gita, Yoga Sutras, Upanishads, shlokas,
-    Sanskrit verses, chapters, sutras, mantras, commentaries.
-  • Spiritual concepts: Karma, Dharma, Yoga (all types), Bhakti, Jnana, Atman,
-    Brahman, Moksha, Maya, AUM, meditation, samadhi, consciousness, Vedanta.
-  • Personal life struggles answered through scripture:
-    confusion about purpose, lack of focus, anxiety, fear, grief, depression,
-    duty dilemmas, relationship problems, ethical decisions, meaning of life,
-    fear of death, addiction, anger, attachment — ALL are relevant because the
-    Gita and Upanishads address human struggle directly.
+GREETING — casual conversational openers that need a warm reply, not a scripture search:
+  hi, hello, namaste, good morning, how are you, thanks, thank you,
+  who are you, what can you do, nice to meet you, bye, see you,
+  how's it going, tell me about yourself — any short social exchange.
 
-IRRELEVANT — only clear off-topic questions:
-  coding, science, math, weather, cooking, sports, news, medical diagnosis,
-  legal advice, financial tips, entertainment recommendations.
+RELEVANT — spiritual or personal questions that need scripture retrieval:
+  • Direct scripture: Bhagavad Gita, Yoga Sutras, Upanishads, shlokas, Sanskrit verses,
+    sutras, mantras, commentaries, chapters.
+  • Spiritual concepts: Karma, Dharma, Yoga, Bhakti, Jnana, Atman, Brahman, Moksha,
+    Maya, AUM, meditation, samadhi, consciousness, Vedanta.
+  • Personal struggles: focus, anxiety, fear, grief, depression, purpose, duty,
+    relationships, anger, attachment, meaning of life, fear of death.
+
+IRRELEVANT — clear off-topic with no spiritual connection:
+  coding, math, weather, cooking, sports, news, medical diagnosis, legal, financial.
 
 When in doubt, classify as RELEVANT.
-Reply with exactly one word: RELEVANT or IRRELEVANT"""
+Reply with exactly one word: GREETING, RELEVANT, or IRRELEVANT"""
 
+
+# ── Chat prompt — conversational greeting/small-talk reply ───────────────────
+CHAT_SYSTEM_SUFFIX = (
+    "\n\nThe seeker has just sent a greeting or conversational message. "
+    "Respond warmly and naturally as this guru — friendly, brief, inviting. "
+    "DO NOT cite scriptures or retrieved passages. "
+    "Acknowledge any prior conversation context if helpful, then gently invite a spiritual question."
+)
 
 # ── Query rewriter — standalone search query ──────────────────────────────────
 REWRITE_PROMPT = """\

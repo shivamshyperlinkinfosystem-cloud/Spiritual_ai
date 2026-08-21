@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from src.pipeline.state import SpiritualState
 from src.pipeline.retriever import BM25Retriever, compress
 from src.config import RETRIEVAL_K
-from src.prompts import GUARD_SYSTEM, REWRITE_PROMPT, REJECT_MESSAGE
+from src.prompts import GUARD_SYSTEM, REWRITE_PROMPT, REJECT_MESSAGE, CHAT_SYSTEM_SUFFIX
 
 
 # ── 1. Guard — topic relevance classifier ────────────────────────────────────
@@ -18,13 +18,31 @@ def make_guard_node(llm):
         last = next((m for m in reversed(state["messages"])
                      if isinstance(m, HumanMessage)), None)
         if last is None:
-            return {"is_relevant": True}
+            return {"is_relevant": True, "intent": "spiritual"}
         resp = llm.invoke([
             SystemMessage(content=GUARD_SYSTEM),
             HumanMessage(content=last.content),
         ])
-        return {"is_relevant": "IRRELEVANT" not in resp.content.strip().upper()}
+        word = resp.content.strip().upper()
+        if "GREETING" in word:
+            intent = "greeting"
+        elif "IRRELEVANT" in word:
+            intent = "irrelevant"
+        else:
+            intent = "spiritual"
+        return {"is_relevant": intent != "irrelevant", "intent": intent}
     return guard
+
+
+# ── 1b. Chat — warm conversational reply (no RAG) ────────────────────────────
+def make_chat_node(llm, system_prompt: str):
+    chat_system = system_prompt.split("\n\nRules:")[0] + CHAT_SYSTEM_SUFFIX
+
+    def chat(state: SpiritualState) -> dict:
+        recent = list(state["messages"])[-10:]
+        response = llm.invoke([SystemMessage(content=chat_system), *recent])
+        return {"messages": [response], "sources": []}
+    return chat
 
 
 # ── 2. Reject — polite off-topic refusal ─────────────────────────────────────
@@ -116,4 +134,9 @@ def make_generate_node(llm, prompt_template):
 
 # ── Routing helper ────────────────────────────────────────────────────────────
 def route_after_guard(state: SpiritualState) -> str:
-    return "rewrite" if state.get("is_relevant", True) else "reject"
+    intent = state.get("intent", "spiritual")
+    if intent == "irrelevant":
+        return "reject"
+    if intent == "greeting":
+        return "chat"
+    return "rewrite"

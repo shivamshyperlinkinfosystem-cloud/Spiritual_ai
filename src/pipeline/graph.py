@@ -16,6 +16,7 @@ from src.pipeline.embeddings import FastEmbeddings
 from src.pipeline.retriever import BM25Retriever
 from src.pipeline.nodes import (
     make_guard_node,
+    make_chat_node,
     make_rewrite_node,
     make_retrieve_node,
     make_generate_node,
@@ -52,6 +53,7 @@ def build_app(vectorstore, embeddings: FastEmbeddings,
 
     g = StateGraph(SpiritualState)
     g.add_node("guard",    make_guard_node(llm))
+    g.add_node("chat",     make_chat_node(llm, system_prompt))
     g.add_node("rewrite",  make_rewrite_node(llm))
     g.add_node("retrieve", make_retrieve_node(vector_retriever, bm25, embeddings))
     g.add_node("generate", make_generate_node(llm, prompt_template))
@@ -59,7 +61,8 @@ def build_app(vectorstore, embeddings: FastEmbeddings,
 
     g.add_edge(START, "guard")
     g.add_conditional_edges("guard", route_after_guard,
-                            {"rewrite": "rewrite", "reject": "reject"})
+                            {"rewrite": "rewrite", "chat": "chat", "reject": "reject"})
+    g.add_edge("chat",     END)
     g.add_edge("rewrite",  "retrieve")
     g.add_edge("retrieve", "generate")
     g.add_edge("generate",  END)

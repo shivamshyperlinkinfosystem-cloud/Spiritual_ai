@@ -11,4 +11,5 @@ class SpiritualState(TypedDict):
     context:     str          # retrieved passages for current question
     sources:     list[str]    # citation strings e.g. "Bhagavad Gita Ch.2 V.47"
     is_relevant: bool         # set by guard node
+    intent:      str          # "greeting" | "spiritual" | "irrelevant"
     query:       str          # rewritten standalone search query

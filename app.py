@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage
 
-from src.config import EMBED_MODEL, VECTORSTORE
+from src.config import EMBED_MODEL, VECTORSTORE, LLM_MODEL
 from src.pipeline.embeddings import FastEmbeddings
 from src.pipeline.graph import build_app
 from src.prompts import PERSONAS, WELCOME_MESSAGES
@@ -160,6 +160,7 @@ if user_input:
         "context":     "",
         "sources":     [],
         "is_relevant": True,
+        "intent":      "spiritual",
         "query":       "",
     }
 
@@ -198,7 +199,7 @@ if user_input:
                 content = getattr(chunk, "content", "")
                 if not content:
                     continue
-                if node == "generate":
+                if node in ("generate", "chat"):
                     full_content    += content
                     display_content  = full_content.split("\n\n*— Sources:")[0]
                     ans_ph.markdown(display_content + "▌")
