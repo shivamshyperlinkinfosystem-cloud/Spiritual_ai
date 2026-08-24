@@ -51,4 +51,6 @@ def compress(query: str,
     dn = d / (np.linalg.norm(d, axis=1, keepdims=True) + 1e-9)
     sims   = dn @ qn
     ranked = sorted(zip(docs, sims), key=lambda x: x[1], reverse=True)
-    return [doc for doc, s in ranked if s >= SIM_THRESHOLD][:FINAL_K]
+    filtered = [doc for doc, s in ranked if s >= SIM_THRESHOLD][:FINAL_K]
+    # always return at least the top results even if none pass the threshold
+    return filtered if filtered else [doc for doc, _ in ranked[:FINAL_K]]

@@ -21,5 +21,5 @@ LLM_MODEL     = "openai/gpt-oss-120b"
 # ── Retrieval tuning ──────────────────────────────────────────────────────────
 RETRIEVAL_K   = 8      # candidates fetched from each retriever
 FINAL_K       = 5      # kept after contextual compression
-SIM_THRESHOLD = 0.28   # minimum cosine similarity to keep a chunk
+SIM_THRESHOLD = 0.10   # minimum cosine similarity to keep a chunk
 MMR_FETCH_K   = 20     # candidates for MMR diversity pass
