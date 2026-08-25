@@ -134,9 +134,16 @@ for entry in st.session_state.chat_display:
     with st.chat_message(entry["role"], avatar=entry["avatar"]):
         st.markdown(entry["content"])
         if entry.get("sources"):
+            _PDF_MAP = {
+                "Bhagavad Gita":            "bhagavad_gita.pdf",
+                "Yoga Sutras of Patanjali": "yoga_sutras.pdf",
+                "Ten Principal Upanishads": "upanishads.pdf",
+            }
             with st.expander("📖 Sources", expanded=False):
                 for src in entry["sources"]:
-                    st.caption(f"• {src}")
+                    book = next((k for k in _PDF_MAP if src.startswith(k)), None)
+                    fname = f"  `{_PDF_MAP[book]}`" if book else ""
+                    st.caption(f"• {src}{fname}")
 
 if not st.session_state.chat_display:
     with st.chat_message("assistant", avatar=icon):
@@ -217,9 +224,16 @@ if user_input:
             raw     = full_content.split("\n\n*— Sources:")[1].rstrip("*").strip()
             sources = [s.strip() for s in raw.split(",") if s.strip()]
         if sources:
-            with st.expander("📖 Sources", expanded=False):
+            _PDF_MAP = {
+                "Bhagavad Gita":            "bhagavad_gita.pdf",
+                "Yoga Sutras of Patanjali": "yoga_sutras.pdf",
+                "Ten Principal Upanishads": "upanishads.pdf",
+            }
+            with st.expander("📖 Sources", expanded=True):
                 for src in sources:
-                    st.caption(f"• {src}")
+                    book = next((k for k in _PDF_MAP if src.startswith(k)), None)
+                    fname = f"  `{_PDF_MAP[book]}`" if book else ""
+                    st.caption(f"• {src}{fname}")
 
     st.session_state.messages = list(st.session_state.messages) + [
         AIMessage(content=full_content)
