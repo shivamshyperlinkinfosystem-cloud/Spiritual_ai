@@ -49,6 +49,13 @@ RETRIEVAL_K   = 8
 FINAL_K       = 5
 SIM_THRESHOLD = 0.28
 
+# Maps human-readable source name → actual PDF filename
+PDF_FILENAME_MAP = {
+    "Bhagavad Gita":             "bhagavad_gita.pdf",
+    "Yoga Sutras of Patanjali":  "yoga_sutras.pdf",
+    "Ten Principal Upanishads":  "upanishads.pdf",
+}
+
 
 # ── (prompts removed — see prompts.py) ───────────────────────────────────────
 
@@ -302,7 +309,15 @@ def chat() -> None:
             })
 
         if result.get("context"):
-            console.print(f"[dim]📖 Retrieved passages:\n{result['context'][:500]}…[/dim]\n")
+            sources_debug = result.get("sources", [])
+            pdf_lines = []
+            for s in sources_debug:
+                # s looks like "Yoga Sutras of Patanjali p.5"
+                book = next((k for k in PDF_FILENAME_MAP if s.startswith(k)), None)
+                fname = PDF_FILENAME_MAP.get(book, "unknown.pdf") if book else "unknown.pdf"
+                pdf_lines.append(f"  {s}  →  data/pdfs/{fname}")
+            pdf_info = "\n".join(pdf_lines) if pdf_lines else "  (source info unavailable)"
+            console.print(f"[dim]📖 Scripture source(s):\n{pdf_info}[/dim]\n")
         else:
             console.print("[yellow]⚠ No scripture retrieved — LLM answered from general knowledge[/yellow]\n")
 
