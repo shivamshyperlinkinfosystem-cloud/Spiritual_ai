@@ -300,6 +300,12 @@ def chat() -> None:
                 "messages": messages, "context": "", "sources": [],
                 "is_relevant": True, "query": "",
             })
+
+        if result.get("context"):
+            console.print(f"[dim]📖 Retrieved passages:\n{result['context'][:500]}…[/dim]\n")
+        else:
+            console.print("[yellow]⚠ No scripture retrieved — LLM answered from general knowledge[/yellow]\n")
+
         messages = list(result["messages"])
         console.print()
         console.print(Text(f"{persona_key.split()[0]}  Guru:", style="bold green"))
