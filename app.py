@@ -402,7 +402,7 @@ if not st.session_state.seeded:
         "Hey! I'm **Dora** — think of me as your profile wingperson. 😊\n\n"
         "I'm going to ask you a few things, but I promise it won't feel like a form. "
         "Just a chill chat to help you show up as *you* to the people you want to connect with.\n\n"
-        "So — what's your name, and what's been taking up your time lately?"
+        
     )})
     st.session_state.seeded = True
 
