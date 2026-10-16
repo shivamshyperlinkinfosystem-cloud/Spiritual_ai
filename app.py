@@ -148,16 +148,26 @@ st.html("""
 """)
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
-def _secret(key: str, default: str = "") -> str:
-    try:
-        return st.secrets[key]
-    except (KeyError, FileNotFoundError):
-        return os.getenv(key, default)
+import os
+import streamlit as st
+from dotenv import load_dotenv
 
-GROQ_API_KEY    = _secret("GROQ_API_KEY")
-SENDER_EMAIL    = os.getenv("SENDER_EMAIL")
-SENDER_PASSWORD = os.getenv("SENDER_PASSWORD").replace(" ", "")
+load_dotenv()
 
+def get_secret(name):
+    value = os.getenv(name)
+
+    if value is None:
+        value = st.secrets.get(name)
+
+    if not value:
+        raise RuntimeError(f"Missing required secret: {name}")
+
+    return str(value)
+
+SENDER_EMAIL = get_secret("SENDER_EMAIL")
+SENDER_PASSWORD = get_secret("SENDER_PASSWORD").replace(" ", "")
+GROQ_API_KEY = get_secret("GROQ_API_KEY")
 # ── Email ─────────────────────────────────────────────────────────────────────
 def send_profile_email(to_email: str, profile: dict) -> tuple[bool, str]:
     if not SENDER_EMAIL or not SENDER_PASSWORD:
